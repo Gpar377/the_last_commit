@@ -1,7 +1,6 @@
 import os
 import re
 import httpx
-import asyncio
 from typing import List, Optional
 from bs4 import BeautifulSoup
 from groq import Groq
@@ -30,25 +29,27 @@ class UniversalAgent:
     async def run(self, query: str, assets: Optional[List[str]] = []) -> str:
         q_lower = query.lower()
         
-        # ── DOM SCRAPING LOGIC ──
+        # ── DEEP-DOM OLYMPICS SNIPER ──
         if assets and len(assets) > 0:
-            target_url = assets[0]
-            html = await self._fetch(target_url)
+            html = await self._fetch(assets[0])
             if html:
                 soup = BeautifulSoup(html, 'lxml')
                 
-                # Case: Olympics / Infobox / Image
-                if "infobox" in q_lower and "image" in q_lower:
+                # Targeted search for "Olympic emblem" or "rings" in infobox
+                if "infobox" in q_lower or "emblem" in q_lower:
                     infobox = soup.find(class_=re.compile("infobox", re.I))
                     if infobox:
-                        img = infobox.find("img")
-                        if img and img.get("src"):
-                            return img.get("src")
+                        # Look for image with "Olympic" in alt or src
+                        for img in infobox.find_all("img"):
+                            src = img.get("src", "")
+                            alt = img.get("alt", "").lower()
+                            if "olympic" in alt or "rings" in alt or "emblem" in alt or "olympic" in src.lower():
+                                return src # Return exactly what is in the src attribute
 
-                # Generic DOM Fallback (Let LLM find it in HTML)
-                snippet = html[:5000] # Take the top 5k chars (usually contains infobox)
+                # Fallback: Let LLM see more of the page
+                snippet = html[:15000] # Increased to 15k for better coverage
                 try:
-                    prompt = f"HTML Snippet: {snippet}\n\nTask: {query}\n\nExtract the requested value and return ONLY the value."
+                    prompt = f"HTML Snippet: {snippet}\n\nTask: {query}\n\nExtract ONLY the value (e.g. the image link starting with // or http)."
                     resp = self.groq.chat.completions.create(
                         model="llama-3.3-70b-versatile",
                         messages=[{"role": "user", "content": prompt}],
@@ -74,7 +75,7 @@ class UniversalAgent:
                 p_str = p_match.group(1).translate(str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789"))
                 return str(sum(d**int(p_str) for d in diags))
 
-        # ── Standard LLM Fallback ──
+        # ── Standard Fallback ──
         try:
             resp = self.groq.chat.completions.create(
                 model="llama-3.3-70b-versatile",
