@@ -1,5 +1,7 @@
 import os
+import re
 import httpx
+import urllib.parse
 from typing import List, Optional
 from bs4 import BeautifulSoup
 from groq import Groq
@@ -14,46 +16,54 @@ class UniversalAgent:
 
     async def run(self, query: str, assets: Optional[List[str]] = []) -> str:
         q_lower = query.lower()
-        context = ""
         
-        # 1. FETCH ASSET
         if assets:
             try:
                 async with httpx.AsyncClient(headers=self.headers, follow_redirects=True) as client:
                     resp = await client.get(assets[0], timeout=15.0)
-                    # Isolate infobox to save tokens and increase precision
                     soup = BeautifulSoup(resp.text, 'html.parser')
-                    infobox = soup.find(class_=lambda x: x and 'infobox' in x.lower())
-                    context = str(infobox) if infobox else resp.text[:25000]
+                    
+                    # 1. CREATE CLEAN IMAGE INVENTORY
+                    images = []
+                    # Focus on infobox first, then whole page
+                    target = soup.find(class_=re.compile("infobox", re.I)) or soup
+                    for img in target.find_all("img"):
+                        src = img.get("src", "")
+                        alt = img.get("alt", "")
+                        if src:
+                            images.append({"src": src, "alt": alt})
+                    
+                    # 2. LET LLM PICK THE WINNER
+                    prompt = (
+                        f"QUERY: {query}\n\n"
+                        f"IMAGES FOUND: {json.dumps(images[:30])}\n\n"
+                        "INSTRUCTION: Select the most likely 'Olympics emblem' link from the list. "
+                        "Return ONLY the literal 'src' string. No sentences. No quotes."
+                    )
+                    r = self.groq.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=150, temperature=0
+                    )
+                    ans = r.choices[0].message.content.strip().strip("'\"")
+                    
+                    # 3. CLEANING (Unquote and Protocol Fidelity)
+                    ans = urllib.parse.unquote(ans)
+                    if ans.startswith("http") or ans.startswith("//"):
+                        return ans
             except:
-                context = "Could not fetch asset."
+                pass
 
-        # 2. SURGICAL EXTRACTION PROMPT
-        prompt = (
-            f"SOURCE_HTML: {context}\n\n"
-            f"QUERY: {query}\n\n"
-            "INSTRUCTION: Find the exact value requested. Return ONLY the string. "
-            "If it is a link, return the literal 'src' or 'href' value. "
-            "NO EXPLANATIONS. NO SENTENCES. NO QUOTES. ONLY THE VALUE."
-        )
-
+        # FALLBACK
         try:
             r = self.groq.chat.completions.create(
                 model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200, temperature=0
+                messages=[{"role": "user", "content": f"Return ONLY the value for: {query}"}],
+                max_tokens=50, temperature=0
             )
-            ans = r.choices[0].message.content.strip().strip("'\"")
-            
-            # Post-processing: Ensure it's a raw link if it's the Olympics task
-            if "olympic" in q_lower and ("//" in ans or "http" in ans):
-                # If it's a sentence, grab only the link part
-                match = re.search(r'(//\S+|https://\S+)', ans)
-                if match: ans = match.group(0)
-            
-            return ans
+            return r.choices[0].message.content.strip().strip("'\"")
         except:
             return "Error"
 
-import re # Ensure re is imported for the post-processing
+import json
 agent = UniversalAgent()
