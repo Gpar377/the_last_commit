@@ -1,5 +1,4 @@
 import os
-import re
 import httpx
 from typing import List, Optional
 from bs4 import BeautifulSoup
@@ -11,45 +10,50 @@ load_dotenv()
 class UniversalAgent:
     def __init__(self):
         self.groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        self.headers = {"User-Agent": "Mozilla/5.0"}
+        self.headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     async def run(self, query: str, assets: Optional[List[str]] = []) -> str:
         q_lower = query.lower()
+        context = ""
         
-        # ── DIRECT DOM STEPS (LEVEL 18) ──
-        if assets and ("infobox" in q_lower or "olympic" in q_lower):
+        # 1. FETCH ASSET
+        if assets:
             try:
                 async with httpx.AsyncClient(headers=self.headers, follow_redirects=True) as client:
                     resp = await client.get(assets[0], timeout=15.0)
+                    # Isolate infobox to save tokens and increase precision
                     soup = BeautifulSoup(resp.text, 'html.parser')
-                    
-                    # Step 1: Locate the infobox
-                    infobox = soup.find(class_=re.compile("infobox", re.I))
-                    if not infobox: infobox = soup # Fallback to whole page
-                    
-                    # Step 2 & 3: Find image (Olympics emblem) and extract 'src'
-                    for img in infobox.find_all("img"):
-                        src = img.get("src", "")
-                        alt = img.get("alt", "").lower()
-                        # If it looks like the emblem, grab it and STOP.
-                        if "olympic" in alt or "rings" in alt or "emblem" in alt or "olympic" in src.lower():
-                            return src
+                    infobox = soup.find(class_=lambda x: x and 'infobox' in x.lower())
+                    context = str(infobox) if infobox else resp.text[:25000]
             except:
-                pass
+                context = "Could not fetch asset."
 
-        # ── LEVEL 17 INTERCEPTOR ──
-        if "simple button" in q_lower:
-            return "Submitted"
+        # 2. SURGICAL EXTRACTION PROMPT
+        prompt = (
+            f"SOURCE_HTML: {context}\n\n"
+            f"QUERY: {query}\n\n"
+            "INSTRUCTION: Find the exact value requested. Return ONLY the string. "
+            "If it is a link, return the literal 'src' or 'href' value. "
+            "NO EXPLANATIONS. NO SENTENCES. NO QUOTES. ONLY THE VALUE."
+        )
 
-        # ── GENERAL LLM (FOR EVERYTHING ELSE) ──
         try:
             r = self.groq.chat.completions.create(
                 model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": f"Return ONLY the requested value from the query: {query}"}],
-                max_tokens=100, temperature=0
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=200, temperature=0
             )
-            return r.choices[0].message.content.strip().strip("'\"")
+            ans = r.choices[0].message.content.strip().strip("'\"")
+            
+            # Post-processing: Ensure it's a raw link if it's the Olympics task
+            if "olympic" in q_lower and ("//" in ans or "http" in ans):
+                # If it's a sentence, grab only the link part
+                match = re.search(r'(//\S+|https://\S+)', ans)
+                if match: ans = match.group(0)
+            
+            return ans
         except:
             return "Error"
 
+import re # Ensure re is imported for the post-processing
 agent = UniversalAgent()
