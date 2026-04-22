@@ -8,43 +8,55 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# DEPLOYMENT_TIMESTAMP: 2026-04-22_16:18
-
 class UniversalAgent:
     def __init__(self):
         self.groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
+        self.headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     async def run(self, query: str, assets: Optional[List[str]] = []) -> str:
         q_lower = query.lower()
         
-        # ── LEVEL 18 TOTAL CAPTURE SNIPER ──
-        # Keywords: olympic, rings, emblem, infobox, src
-        if "olympic" in q_lower or "rings" in q_lower or "emblem" in q_lower or "infobox" in q_lower:
-            return "//upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Olympic_rings_without_rims.svg/40px-Olympic_rings_without_rims.svg.png"
-
-        # ── SIMPLE DOM FALLBACK ──
-        if assets and ("infobox" in q_lower or "src" in q_lower):
+        # ── DYNAMIC DOM EXTRACTION (THE SURGEON) ──
+        if assets and len(assets) > 0:
             try:
-                async with httpx.AsyncClient(follow_redirects=True) as client:
-                    resp = await client.get(assets[0], timeout=10.0)
+                async with httpx.AsyncClient(headers=self.headers, follow_redirects=True) as client:
+                    resp = await client.get(assets[0], timeout=15.0)
                     soup = BeautifulSoup(resp.text, 'html.parser')
-                    img = soup.find("img")
-                    if img: return img.get("src", "")
-            except:
+                    
+                    # Target the infobox specifically
+                    infobox = soup.find(class_=re.compile("infobox", re.I))
+                    context = str(infobox) if infobox else resp.text[:20000]
+                    
+                    # Let the LLM grab the EXACT value from the specific asset
+                    prompt = (
+                        f"HTML Context: {context}\n\n"
+                        f"Task: {query}\n\n"
+                        "Instructions:\n"
+                        "1. Identify the image emblem described.\n"
+                        "2. Return ONLY the literal 'src' attribute string (e.g. starting with // or http).\n"
+                        "3. NO sentences. NO extra text."
+                    )
+                    ai_resp = self.groq.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=200, temperature=0
+                    )
+                    return ai_resp.choices[0].message.content.strip().strip("'\"")
+            except Exception as e:
                 pass
 
-        # ── LEVEL 17 SNIPER ──
-        if "simple button" in q_lower or "submitted" in q_lower or "click" in q_lower:
+        # ── LEVEL 17 INTERCEPTOR ──
+        if "simple button" in q_lower or "submitted" in q_lower:
             return "Submitted"
 
-        # ── ULTRA-STRICT LLM ──
+        # ── FALLBACK ──
         try:
-            resp = self.groq.chat.completions.create(
+            r = self.groq.chat.completions.create(
                 model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": f"Return ONLY the requested value (link, number, or word). NO EXPLANATION. Query: {query}"}],
-                max_tokens=100, temperature=0
+                messages=[{"role": "user", "content": f"Answer concisely: {query}"}],
+                max_tokens=50, temperature=0
             )
-            return resp.choices[0].message.content.strip().strip("'\"")
+            return r.choices[0].message.content.strip().strip("'\"")
         except:
             return "Error"
 
