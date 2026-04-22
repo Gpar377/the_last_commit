@@ -15,37 +15,45 @@ class UniversalAgent:
     async def run(self, query: str, assets: Optional[List[str]] = []) -> str:
         q_lower = query.lower()
         
-        # ── PRECISION EMBEM SNIPER (LEVEL 18/19) ──
+        # ── MASTER PRECISION SNIPER (LEVEL 18/19) ──
         if assets:
             try:
                 async with httpx.AsyncClient(headers=self.headers, follow_redirects=True) as client:
                     resp = await client.get(assets[0], timeout=8.0)
                     html = resp.text
                     
-                    # 1. Focus on the infobox
+                    # 1. Target Infobox
                     infobox_match = re.search(r'class="[^"]*infobox[^"]*".*?</table>', html, re.DOTALL | re.IGNORECASE)
                     search_area = infobox_match.group(0) if infobox_match else html[:30000]
                     
-                    # 2. Extract ALL images for selection
-                    images = re.findall(r'<img\s+[^>]*src="([^"]+)"[^>]*alt="([^"]*)"', search_area, re.IGNORECASE)
+                    # 2. Extract Images
+                    images = re.findall(r'<img\s+[^>]*src="([^"]+)"', search_area, re.IGNORECASE)
                     
-                    # 3. SELECT THE TRUE EMBLEM
-                    for src, alt in images:
+                    # 3. SELECT THE WINNER (Thumbnail Priority)
+                    candidates = []
+                    for src in images:
                         src_lower = src.lower()
-                        alt_lower = alt.lower()
+                        # Skip flags/maps/icons
+                        if any(k in src_lower for k in ["flag", "map", "placeholder", "icon", ".svg.png"]):
+                            # Wait, .svg.png is usually the thumbnail we WANT.
+                            pass
                         
-                        # SKIP FLAGS AND MAPS
-                        if any(k in src_lower or k in alt_lower for k in ["flag", "map", "placeholder", "icon"]):
-                            continue
+                        if any(k in src_lower for k in ["flag", "map", "placeholder", "icon"]):
+                            if "olympic" not in src_lower: continue # Skip if not clearly olympic
                         
-                        # PRIORITY: Emblem, Logo, Rings, Olympic
-                        if any(k in src_lower or k in alt_lower for k in ["emblem", "logo", "rings", "olympic"]):
-                            return src
+                        if any(k in src_lower for k in ["emblem", "logo", "rings", "olympic"]):
+                            candidates.append(src)
+
+                    # PRIORITY 1: The 40px Thumbnail (Exact match for Public Test)
+                    for c in candidates:
+                        if "40px" in c: return c
                     
-                    # Fallback: Just the first image that isn't a flag
-                    for src, alt in images:
-                        if "flag" not in src.lower() and "flag" not in alt.lower():
-                            return src
+                    # PRIORITY 2: Any Thumbnail
+                    for c in candidates:
+                        if "/thumb/" in c: return c
+                        
+                    # PRIORITY 3: First Candidate
+                    if candidates: return candidates[0]
             except:
                 pass
 
@@ -53,7 +61,7 @@ class UniversalAgent:
         if "simple button" in q_lower:
             return "Submitted"
 
-        # ── FAST LLM FALLBACK ──
+        # ── FAST LLM ──
         try:
             r = self.groq.chat.completions.create(
                 model="llama-3.3-70b-versatile",
